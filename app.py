@@ -173,9 +173,19 @@ Keep it concise.
 # ----------------------------------------------------------
 # SESSION STATE
 # ----------------------------------------------------------
+required_cols = [
+    "MRN",
+    "OrderDateTime",
+    "Baseline",
+    "LastPrediction"
+]
 
 if "risk_registry" not in st.session_state:
-    st.session_state.risk_registry = pd.DataFrame()
+    st.session_state.risk_registry = pd.DataFrame(columns=required_cols)
+
+if not set(required_cols).issubset(
+        set(st.session_state.risk_registry.columns)):
+    st.session_state.risk_registry = pd.DataFrame(columns=required_cols)
 
 # ----------------------------------------------------------
 # PATIENT INPUT
@@ -229,6 +239,9 @@ now = datetime.now(PH_TZ)
 
 for idx, row in st.session_state.risk_registry.iterrows():
 
+    # --- SAFETY GUARD ---
+    if "Baseline" not in row or pd.isna(row["Baseline"]):
+        continue
     snapshot = row["Baseline"].copy()
     elapsed = int((now - row["OrderDateTime"]).total_seconds() / 60)
     elapsed = max(elapsed, 0)
