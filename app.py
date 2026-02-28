@@ -115,17 +115,17 @@ def assign_risk(minutes):
 # SESSION STATE BOARD (Stable Schema)
 # ----------------------------------------------------------
 
-required_cols = {
+required_cols = [
     "MRN",
     "Order DateTime",
     "Baseline Features",
     "Original Projected Minutes"
-}
+]
 
 if "risk_registry" not in st.session_state:
     st.session_state.risk_registry = pd.DataFrame(columns=required_cols)
 
-if not required_cols.issubset(set(st.session_state.risk_registry.columns)):
+if not set(required_cols).issubset(set(st.session_state.risk_registry.columns)):
     st.session_state.risk_registry = pd.DataFrame(columns=required_cols)
 
 # ----------------------------------------------------------
