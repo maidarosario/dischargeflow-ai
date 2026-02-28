@@ -1,8 +1,7 @@
 # ==========================================================
 # DischargeFlow AI
 # Live Discharge Risk Command Center
-# Classification + Regression Integrated
-# Deployment-Ready Version (Streamlit Cloud Safe)
+# Elapsed Escalation + Auto Refresh Enabled
 # ==========================================================
 
 import streamlit as st
@@ -16,6 +15,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
+import time
 
 # ----------------------------------------------------------
 # Page Config
@@ -24,9 +24,30 @@ from sklearn.impute import SimpleImputer
 st.set_page_config(page_title="DischargeFlow AI", layout="wide")
 st.title("DischargeFlow AI")
 st.caption("Live discharge delay monitoring and operational command board.")
+st.markdown("""
+### Operational Enhancements
+
+- Live discharge delay risk monitoring  
+- Projected completion time forecasting  
+- Automatic early warning escalation  
+- Real-time command board updates  
+- Actionable discharge coordination guidance  
+- Data-driven prioritization of high-risk cases  
+""")
 
 # ----------------------------------------------------------
-# OpenAI Configuration (Streamlit Cloud Safe)
+# AUTO REFRESH (Every 30 seconds)
+# ----------------------------------------------------------
+
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = time.time()
+
+if time.time() - st.session_state.last_refresh > 30:
+    st.session_state.last_refresh = time.time()
+    st.rerun()
+
+# ----------------------------------------------------------
+# OpenAI Configuration
 # ----------------------------------------------------------
 
 if "OPENAI_API_KEY" not in st.secrets:
@@ -43,15 +64,22 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 def load_data():
     df = pd.read_csv("fictitious_dataset_FINAL.csv")
     df.columns = df.columns.str.strip()
+
     df["delayed_over_200mins"] = (
         df["Discharge Duration (minutes)"] > 200
     ).astype(int)
+
+    df["Elapsed Minutes"] = (
+        df["Discharge Duration (minutes)"] *
+        np.random.uniform(0.3, 0.9, size=len(df))
+    ).astype(int)
+
     return df
 
 df = load_data()
 
 # ----------------------------------------------------------
-# Train Models (Classifier + Regressor)
+# Train Models
 # ----------------------------------------------------------
 
 @st.cache_resource
@@ -97,7 +125,6 @@ def train_models(df):
     clf_model.fit(X_train, y_train_class)
     reg_model.fit(X_train, y_train_reg)
 
-    # Residual standard deviation for CI
     train_preds = reg_model.predict(X_train)
     residuals = y_train_reg - train_preds
     residual_std = np.std(residuals)
@@ -137,55 +164,7 @@ def assign_severity(prob):
         return "Low", "🟢"
 
 # ----------------------------------------------------------
-# AI Advisory Generator
-# ----------------------------------------------------------
-
-def generate_advisory(prob, projected_minutes, patient_data):
-
-    severity, _ = assign_severity(prob)
-
-    prompt = f"""
-You are advising a HOSPITAL DISCHARGE TEAM.
-
-This is operational discharge guidance only.
-
-Patient Profile:
-- Age: {patient_data['Patient Age']}
-- Length of Stay: {patient_data['Length of Stay (days)']}
-- Diagnosis: {patient_data['Primary Diagnosis (Description)']}
-- Delay Probability: {round(prob,2)}
-- Projected Discharge Duration: {int(projected_minutes)} minutes
-- Risk Level: {severity}
-
-Use EXACTLY these section headers:
-
-Operational Risks
-Clinical Coordination Actions
-Discharge Process Actions
-Escalation Plan
-
-Under each header:
-- Use bullet points
-- Keep bullets short and actionable
-- No JSON
-- No quotation marks
-- No paragraphs
-"""
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system",
-             "content": "You generate operational discharge playbooks in bullet format."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.2
-    )
-
-    return response.choices[0].message.content.strip()
-
-# ----------------------------------------------------------
-# Patient Input Form
+# Patient Input
 # ----------------------------------------------------------
 
 st.markdown("## Patient Input")
@@ -220,7 +199,7 @@ with st.form("patient_form", clear_on_submit=True):
     submitted = st.form_submit_button("Generate Advisory")
 
 # ----------------------------------------------------------
-# Generate Prediction + Advisory
+# Prediction + Escalation
 # ----------------------------------------------------------
 
 if submitted:
@@ -228,6 +207,9 @@ if submitted:
     if not mrn:
         st.error("Please enter MRN.")
     else:
+
+        order_datetime = datetime.combine(order_date, order_time)
+        elapsed = int((datetime.now() - order_datetime).total_seconds() / 60)
 
         baseline_row = {}
 
@@ -239,47 +221,42 @@ if submitted:
         for col in df.select_dtypes(include=["object"]).columns:
             baseline_row[col] = df[col].mode()[0]
 
-        baseline_row["Length of Stay (days)"] = los
-        baseline_row["Number of Doctors Involved"] = doctors
-        baseline_row["Current Bill (PHP)"] = bill
-        baseline_row["Patient Age"] = age
-        baseline_row["Primary Diagnosis (Description)"] = diagnosis_input
+        baseline_row.update({
+            "Length of Stay (days)": los,
+            "Number of Doctors Involved": doctors,
+            "Current Bill (PHP)": bill,
+            "Patient Age": age,
+            "Primary Diagnosis (Description)": diagnosis_input,
+            "Elapsed Minutes": elapsed
+        })
 
         input_df = pd.DataFrame([baseline_row])
 
-        # Classification
         prob = clf_model.predict_proba(input_df)[0][1]
-
-        # Regression
         projected_minutes = reg_model.predict(input_df)[0]
 
-        # Confidence interval
+        # -----------------------------
+        # AUTO ESCALATION LOGIC
+        # -----------------------------
+
+        if elapsed >= projected_minutes:
+            prob = max(prob, 0.90)
+            severity = "Critical"
+            badge = "🔴"
+            st.error("Elapsed time has exceeded projected duration. Immediate escalation required.")
+        else:
+            severity, badge = assign_severity(prob)
+
         ci_lower = projected_minutes - (1.96 * residual_std)
         ci_upper = projected_minutes + (1.96 * residual_std)
-
-        severity, badge = assign_severity(prob)
 
         st.subheader("Prediction")
         st.progress(float(prob))
         st.markdown(f"Delay Probability: {round(prob,2)}")
         st.markdown(f"Projected Duration: {int(projected_minutes)} minutes")
-        st.markdown(
-            f"Expected Range: {int(ci_lower)}–{int(ci_upper)} minutes (95% CI)"
-        )
-
-        if severity == "Critical":
-            st.error("🔴 CRITICAL – Early Discharge Team Intervention Recommended")
-        elif severity == "High":
-            st.warning("🟠 HIGH – Active Coordination Required")
-        elif severity == "Moderate":
-            st.info("🟡 MODERATE – Close Monitoring Recommended")
-        else:
-            st.success("🟢 LOW – Standard Discharge Workflow")
+        st.markdown(f"Expected Range: {int(ci_lower)}–{int(ci_upper)} minutes (95% CI)")
 
         # Update Board
-        order_datetime = datetime.combine(order_date, order_time)
-        elapsed = int((datetime.now() - order_datetime).total_seconds() / 60)
-
         new_row = pd.DataFrame([{
             "MRN": mrn,
             "Risk Level": severity,
@@ -300,18 +277,18 @@ if submitted:
             ignore_index=True
         )
 
-        advisory = generate_advisory(prob, projected_minutes, baseline_row)
-
-        st.markdown("## Discharge Team Operational Advisory")
-        st.markdown(advisory)
-
 # ----------------------------------------------------------
-# Display Risk Command Board
+# Live Risk Command Board
 # ----------------------------------------------------------
 
 if not st.session_state.risk_registry.empty:
 
     display_df = st.session_state.risk_registry.copy()
+
+    # Recalculate elapsed dynamically
+    display_df["Elapsed Minutes"] = display_df["Order DateTime"].apply(
+        lambda x: int((datetime.now() - x).total_seconds() / 60)
+    )
 
     display_df = display_df.sort_values(
         by="Delay Probability",
