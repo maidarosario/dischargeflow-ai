@@ -1,14 +1,17 @@
 # ==========================================================
 # DischargeFlow AI
-# Regression-Based Live Discharge Forecast Engine
-# Dynamic Reforecast Version
+# Live Discharge Risk Command Center
+# Regression-Based Duration Forecasting
+# Philippines Timezone Enabled
 # ==========================================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import pytz
 from openai import OpenAI
+
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.pipeline import Pipeline
@@ -17,15 +20,25 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
 
 # ----------------------------------------------------------
-# Page Config
+# PAGE CONFIG
 # ----------------------------------------------------------
 
 st.set_page_config(page_title="DischargeFlow AI", layout="wide")
+
 st.title("DischargeFlow AI")
-st.caption("Live regression-based discharge duration forecasting system.")
+st.markdown("""
+Live discharge duration forecasting using regression modeling.
+
+**Highlights**
+- Regression-based projected discharge duration (minutes)
+- Philippine Time (Asia/Manila) dynamic clock
+- Live elapsed time recalculation
+- Row-specific duration updates (no shared projections)
+- AI operational discharge advisory
+""")
 
 # ----------------------------------------------------------
-# OpenAI Configuration
+# OPENAI (Streamlit Cloud Safe)
 # ----------------------------------------------------------
 
 if "OPENAI_API_KEY" not in st.secrets:
@@ -35,7 +48,7 @@ if "OPENAI_API_KEY" not in st.secrets:
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # ----------------------------------------------------------
-# Load Data
+# LOAD DATA
 # ----------------------------------------------------------
 
 @st.cache_data
@@ -46,16 +59,13 @@ def load_data():
 df = load_data()
 
 # ----------------------------------------------------------
-# Train Regression Model (Includes Elapsed Feature)
+# TRAIN REGRESSION MODEL
 # ----------------------------------------------------------
 
 @st.cache_resource
 def train_regression_model(df):
 
     target = "Discharge Duration (minutes)"
-
-    # Add synthetic elapsed feature for training stability
-    df["Elapsed Minutes"] = 0
 
     X = df.drop(columns=[target])
     y = df[target]
@@ -68,6 +78,7 @@ def train_regression_model(df):
             ("impute", SimpleImputer(strategy="median")),
             ("scale", StandardScaler())
         ]), numeric_features),
+
         ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False),
          categorical_features)
     ])
@@ -83,51 +94,38 @@ def train_regression_model(df):
 
     model.fit(X_train, y_train)
 
-    return model, numeric_features, categorical_features
+    return model
 
-reg_model, numeric_features, categorical_features = train_regression_model(df)
-
-# ----------------------------------------------------------
-# Session State Board
-# ----------------------------------------------------------
-
-if "risk_registry" not in st.session_state:
-    st.session_state.risk_registry = pd.DataFrame(
-        columns=[
-            "MRN",
-            "Order DateTime",
-            "Projected Minutes",
-            "Feature Snapshot"
-        ]
-    )
+reg_model = train_regression_model(df)
 
 # ----------------------------------------------------------
-# AI Advisory Generator
+# AI ADVISORY
 # ----------------------------------------------------------
 
 def generate_advisory(projected_minutes, patient_data):
 
     prompt = f"""
-You are advising a hospital discharge team.
+You are advising a hospital discharge operations team.
 
-This is operational guidance only.
+This is NOT clinical advice.
+This is operational discharge workflow guidance.
 
-Patient:
-Age: {patient_data['Patient Age']}
-Length of Stay: {patient_data['Length of Stay (days)']}
-Diagnosis: {patient_data['Primary Diagnosis (Description)']}
-Projected Total Discharge Duration: {int(projected_minutes)} minutes
+Patient Profile:
+- Age: {patient_data['Patient Age']}
+- Length of Stay: {patient_data['Length of Stay (days)']}
+- Diagnosis: {patient_data['Primary Diagnosis (Description)']}
+- Projected Discharge Duration: {int(projected_minutes)} minutes
 
-Use EXACTLY these headers:
+Use EXACTLY these section headers:
 
 Operational Risks
 Clinical Coordination Actions
 Discharge Process Actions
 Escalation Plan
 
-Under each header:
+Rules:
 - Use bullet points
-- Short actionable lines
+- Keep bullets short
 - No JSON
 - No quotation marks
 - No parentheses
@@ -137,7 +135,7 @@ Under each header:
         model="gpt-4o-mini",
         messages=[
             {"role": "system",
-             "content": "You generate structured operational discharge playbooks."},
+             "content": "You generate concise hospital discharge playbooks."},
             {"role": "user", "content": prompt}
         ],
         temperature=0.2
@@ -146,12 +144,27 @@ Under each header:
     return response.choices[0].message.content.strip()
 
 # ----------------------------------------------------------
-# Patient Input Form
+# SESSION STATE BOARD
+# ----------------------------------------------------------
+
+if "risk_registry" not in st.session_state:
+    st.session_state.risk_registry = pd.DataFrame(
+        columns=[
+            "MRN",
+            "Order DateTime",
+            "Projected Minutes",
+            "Elapsed Minutes",
+            "Updated Projected Minutes"
+        ]
+    )
+
+# ----------------------------------------------------------
+# PATIENT INPUT
 # ----------------------------------------------------------
 
 st.markdown("## Patient Input")
 
-with st.form("patient_form"):
+with st.form("patient_form", clear_on_submit=True):
 
     mrn = st.text_input("Patient MRN")
 
@@ -165,7 +178,9 @@ with st.form("patient_form"):
         bill = st.number_input("Current Bill (PHP)", 0, 2000000, 50000)
         age = st.slider("Patient Age", 0, 120, 40)
 
-    diagnosis_input = st.text_input("Enter Diagnosis")
+    diagnosis_input = st.text_input("Primary Diagnosis (Description)")
+
+    st.markdown("### Discharge Order Timing")
 
     col_date, col_time = st.columns(2)
 
@@ -173,15 +188,12 @@ with st.form("patient_form"):
         order_date = st.date_input("Discharge Order Date")
 
     with col_time:
-        order_time = st.time_input(
-            "Discharge Order Time",
-            step=timedelta(minutes=1)
-        )
+        order_time = st.time_input("Discharge Order Time")
 
     submitted = st.form_submit_button("Generate Forecast")
 
 # ----------------------------------------------------------
-# Generate Forecast
+# GENERATE FORECAST
 # ----------------------------------------------------------
 
 if submitted:
@@ -190,40 +202,54 @@ if submitted:
         st.error("Please enter MRN.")
     else:
 
-        baseline = {}
+        baseline_row = {}
 
-        for col in numeric_features:
-            if col == "Elapsed Minutes":
-                baseline[col] = 0
-            else:
-                baseline[col] = df[col].median()
+        for col in df.columns:
+            if col != "Discharge Duration (minutes)":
+                if df[col].dtype == "object":
+                    baseline_row[col] = df[col].mode()[0]
+                else:
+                    baseline_row[col] = df[col].median()
 
-        for col in categorical_features:
-            baseline[col] = df[col].mode()[0]
+        baseline_row["Length of Stay (days)"] = los
+        baseline_row["Number of Doctors Involved"] = doctors
+        baseline_row["Current Bill (PHP)"] = bill
+        baseline_row["Patient Age"] = age
+        baseline_row["Primary Diagnosis (Description)"] = diagnosis_input
 
-        baseline["Length of Stay (days)"] = los
-        baseline["Number of Doctors Involved"] = doctors
-        baseline["Current Bill (PHP)"] = bill
-        baseline["Patient Age"] = age
-        baseline["Primary Diagnosis (Description)"] = diagnosis_input
-        baseline["Elapsed Minutes"] = 0
-
-        input_df = pd.DataFrame([baseline])
+        input_df = pd.DataFrame([baseline_row])
 
         projected_minutes = reg_model.predict(input_df)[0]
-        projected_minutes = int(round(projected_minutes))
+        projected_minutes = int(max(projected_minutes, 0))
 
-        order_datetime = datetime.combine(order_date, order_time)
+        # PH TIMEZONE
+        ph_tz = pytz.timezone("Asia/Manila")
+        now = datetime.now(ph_tz)
 
-        st.subheader("Prediction")
+        order_datetime = ph_tz.localize(
+            datetime.combine(order_date, order_time)
+        )
+
+        elapsed = max(
+            int((now - order_datetime).total_seconds() // 60),
+            0
+        )
+
+        updated_projection = max(projected_minutes - elapsed, 0)
+
+        # Display
+        st.subheader("Forecast")
         st.markdown(f"Projected Duration: {projected_minutes} minutes")
+        st.markdown(f"Elapsed Minutes: {elapsed}")
+        st.markdown(f"Updated Projected Minutes: {updated_projection}")
 
-        # Store snapshot
+        # Add to board
         new_row = pd.DataFrame([{
             "MRN": mrn,
             "Order DateTime": order_datetime,
             "Projected Minutes": projected_minutes,
-            "Feature Snapshot": baseline
+            "Elapsed Minutes": elapsed,
+            "Updated Projected Minutes": updated_projection
         }])
 
         st.session_state.risk_registry = (
@@ -237,57 +263,44 @@ if submitted:
             ignore_index=True
         )
 
-        advisory = generate_advisory(projected_minutes, baseline)
+        # AI Advisory
+        advisory = generate_advisory(projected_minutes, baseline_row)
 
         st.markdown("## Discharge Team Operational Advisory")
         st.markdown(advisory)
 
-## ----------------------------------------------------------
-# Live Dynamic Reforecast Board (No Snapshot Storage)
+# ----------------------------------------------------------
+# LIVE COMMAND BOARD
 # ----------------------------------------------------------
 
 if not st.session_state.risk_registry.empty:
 
+    ph_tz = pytz.timezone("Asia/Manila")
+    now = datetime.now(ph_tz)
+
     board = st.session_state.risk_registry.copy()
-    now = datetime.now()
 
-    updated_rows = []
+    for idx, row in board.iterrows():
 
-    for _, row in board.iterrows():
+        order_dt = row["Order DateTime"]
 
-        elapsed = int((now - row["Order DateTime"]).total_seconds() / 60)
-        elapsed = max(elapsed, 0)
+        elapsed = max(
+            int((now - order_dt).total_seconds() // 60),
+            0
+        )
 
-        # Rebuild feature row using stored projected baseline logic
-        baseline = {}
+        board.at[idx, "Elapsed Minutes"] = elapsed
 
-        for col in numeric_features:
-            if col == "Elapsed Minutes":
-                baseline[col] = elapsed
-            else:
-                baseline[col] = df[col].median()
+        original = int(row["Projected Minutes"])
 
-        for col in categorical_features:
-            baseline[col] = df[col].mode()[0]
+        updated = max(original - elapsed, 0)
 
-        temp_df = pd.DataFrame([baseline])
-
-        new_projection = reg_model.predict(temp_df)[0]
-        new_projection = int(round(new_projection))
-
-        updated_rows.append({
-            "MRN": row["MRN"],
-            "Order DateTime": row["Order DateTime"],
-            "Projected Minutes": row["Projected Minutes"],
-            "Elapsed Minutes": elapsed,
-            "Updated Projected Minutes": new_projection
-        })
-
-    updated_df = pd.DataFrame(updated_rows)
+        board.at[idx, "Updated Projected Minutes"] = int(updated)
 
     st.markdown("## Discharge Risk Command Board")
+
     st.dataframe(
-        updated_df.sort_values(by="Updated Projected Minutes", ascending=False),
+        board.sort_values("Updated Projected Minutes", ascending=False),
         use_container_width=True,
         hide_index=True
     )
