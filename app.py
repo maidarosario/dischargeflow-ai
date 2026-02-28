@@ -302,13 +302,21 @@ if not st.session_state.risk_registry.empty:
 
     board = st.session_state.risk_registry.copy()
 
-    board["Projected Minutes"] = pd.to_numeric(
-        board["Projected Minutes"], errors="coerce"
-    ).fillna(0).astype(int)
+    # Recalculate elapsed dynamically
+    current_time = datetime.now()
 
-    board["Updated Projected Minutes"] = pd.to_numeric(
-        board["Updated Projected Minutes"], errors="coerce"
-    ).fillna(0).astype(int)
+    board["Elapsed Minutes"] = board["Order DateTime"].apply(
+        lambda x: int((current_time - x).total_seconds() / 60)
+    )
+
+    # Recalculate updated projected minutes dynamically
+    board["Updated Projected Minutes"] = (
+        board["Projected Minutes"] - board["Elapsed Minutes"]
+    ).clip(lower=0)
+
+    # Ensure integers
+    board["Projected Minutes"] = board["Projected Minutes"].astype(int)
+    board["Updated Projected Minutes"] = board["Updated Projected Minutes"].astype(int)
 
     board = board.sort_values(
         by="Projected Minutes",
