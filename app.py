@@ -104,7 +104,7 @@ reg_model, feature_columns = train_model(df)
 # ----------------------------------------------------------
 
 def assign_risk(minutes):
-    if minutes >= 240:
+    if minutes >= 200:
         return "High", "🟠"
     elif minutes >= 180:
         return "Moderate", "🟡"
