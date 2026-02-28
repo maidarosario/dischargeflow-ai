@@ -1,6 +1,7 @@
 # ==========================================================
 # DischargeFlow AI
-# Regression-Based Discharge Intelligence System
+# Regression-Based Discharge Command Center
+# Stable Production Version
 # ==========================================================
 
 import streamlit as st
@@ -20,8 +21,18 @@ from sklearn.impute import SimpleImputer
 # ----------------------------------------------------------
 
 st.set_page_config(page_title="DischargeFlow AI", layout="wide")
+
 st.title("DischargeFlow AI")
 st.caption("Live discharge duration forecasting and operational command board.")
+
+st.markdown("""
+### System Highlights
+- Projected discharge duration forecasting (minutes)
+- Risk tier derived from projected duration
+- Real-time elapsed time tracking
+- Updated projected duration after elapsed time
+- AI-generated discharge team operational advisory
+""")
 
 # ----------------------------------------------------------
 # OpenAI (Streamlit Cloud Safe)
@@ -39,12 +50,14 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 @st.cache_data
 def load_data():
-    return pd.read_csv("fictitious_dataset_FINAL.csv")
+    df = pd.read_csv("fictitious_dataset_FINAL.csv")
+    df.columns = df.columns.str.strip()
+    return df
 
 df = load_data()
 
 # ----------------------------------------------------------
-# Train REGRESSION Model (Single Model Only)
+# Train Regression Model
 # ----------------------------------------------------------
 
 @st.cache_resource
@@ -84,7 +97,7 @@ def train_regression(df):
 reg_model, numeric_features, categorical_features = train_regression(df)
 
 # ----------------------------------------------------------
-# Risk Logic (Derived from Minutes)
+# Severity Logic (Derived From Minutes)
 # ----------------------------------------------------------
 
 def assign_severity(minutes):
@@ -98,7 +111,7 @@ def assign_severity(minutes):
         return "Low", "🟢"
 
 # ----------------------------------------------------------
-# AI Advisory (Restored – Bullet Format)
+# AI Advisory (Original Format Restored)
 # ----------------------------------------------------------
 
 def generate_advisory(projected_minutes, patient_data):
@@ -106,13 +119,11 @@ def generate_advisory(projected_minutes, patient_data):
     severity, _ = assign_severity(projected_minutes)
 
     prompt = f"""
-You are advising a HOSPITAL DISCHARGE TEAM.
+You are advising a hospital discharge team.
 
-Goal: prevent discharge delays and reduce projected duration.
+This is operational discharge coordination guidance only.
 
-This is operational guidance only.
-
-Patient Profile:
+Patient:
 Age: {patient_data['Patient Age']}
 Length of Stay: {patient_data['Length of Stay (days)']}
 Diagnosis: {patient_data['Primary Diagnosis (Description)']}
@@ -127,7 +138,8 @@ Discharge Process Actions
 Escalation Plan
 
 Under each header:
-- Use short bullet points
+- Use bullet points
+- Keep bullets short and actionable
 - No JSON
 - No quotation marks
 - No paragraphs
@@ -137,7 +149,7 @@ Under each header:
         model="gpt-4o-mini",
         messages=[
             {"role": "system",
-             "content": "You generate structured discharge operational playbooks."},
+             "content": "You generate structured operational discharge guidance."},
             {"role": "user", "content": prompt}
         ],
         temperature=0.2
@@ -146,7 +158,7 @@ Under each header:
     return response.choices[0].message.content.strip()
 
 # ----------------------------------------------------------
-# Risk Registry (Command Board Storage)
+# Initialize Command Board
 # ----------------------------------------------------------
 
 if "risk_registry" not in st.session_state:
@@ -197,7 +209,7 @@ with st.form("patient_form", clear_on_submit=True):
     submitted = st.form_submit_button("Generate Forecast")
 
 # ----------------------------------------------------------
-# Generate Prediction
+# Generate Forecast
 # ----------------------------------------------------------
 
 if submitted:
@@ -228,7 +240,7 @@ if submitted:
         severity, badge = assign_severity(projected_minutes)
 
         # ------------------------------
-        # Display Forecast
+        # Display Projection
         # ------------------------------
 
         st.subheader("Projection")
@@ -236,7 +248,7 @@ if submitted:
         st.markdown(f"Projected Duration: {projected_minutes} minutes")
 
         if severity == "Critical":
-            st.error("🔴 CRITICAL – Immediate Discharge Team Escalation Required")
+            st.error("🔴 CRITICAL – Immediate Escalation Recommended")
         elif severity == "High":
             st.warning("🟠 HIGH – Active Coordination Required")
         elif severity == "Moderate":
@@ -274,7 +286,7 @@ if submitted:
         )
 
         # ------------------------------
-        # AI Advisory Restored
+        # AI Advisory
         # ------------------------------
 
         advisory = generate_advisory(projected_minutes, baseline_row)
