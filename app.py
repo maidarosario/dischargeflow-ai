@@ -1,6 +1,7 @@
 # ==========================================================
 # DischargeFlow AI
 # Live Discharge Risk Command Center
+# Classification + Regression Integrated
 # Deployment-Ready Version (Streamlit Cloud Safe)
 # ==========================================================
 
@@ -10,7 +11,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from openai import OpenAI
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -41,6 +42,7 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 @st.cache_data
 def load_data():
     df = pd.read_csv("fictitious_dataset_FINAL.csv")
+    df.columns = df.columns.str.strip()
     df["delayed_over_200mins"] = (
         df["Discharge Duration (minutes)"] > 200
     ).astype(int)
@@ -49,16 +51,18 @@ def load_data():
 df = load_data()
 
 # ----------------------------------------------------------
-# Train Model (Retrospective – All Columns)
+# Train Models (Classifier + Regressor)
 # ----------------------------------------------------------
 
 @st.cache_resource
-def train_model(df):
+def train_models(df):
 
-    target = "delayed_over_200mins"
+    target_class = "delayed_over_200mins"
+    target_reg = "Discharge Duration (minutes)"
 
-    X = df.drop(columns=[target, "Discharge Duration (minutes)"])
-    y = df[target]
+    X = df.drop(columns=[target_class, target_reg])
+    y_class = df[target_class]
+    y_reg = df[target_reg]
 
     numeric_features = X.select_dtypes(include=["int64", "float64"]).columns.tolist()
     categorical_features = X.select_dtypes(include=["object"]).columns.tolist()
@@ -72,21 +76,35 @@ def train_model(df):
          categorical_features)
     ])
 
-    model = Pipeline([
+    clf_model = Pipeline([
         ("pre", preprocessor),
         ("clf", GradientBoostingClassifier(random_state=42))
     ])
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+    reg_model = Pipeline([
+        ("pre", preprocessor),
+        ("reg", GradientBoostingRegressor(random_state=42))
+    ])
+
+    X_train, X_test, y_train_class, y_test_class = train_test_split(
+        X, y_class, test_size=0.2, random_state=42
     )
 
-    model.fit(X_train, y_train)
+    _, _, y_train_reg, y_test_reg = train_test_split(
+        X, y_reg, test_size=0.2, random_state=42
+    )
 
-    return model
+    clf_model.fit(X_train, y_train_class)
+    reg_model.fit(X_train, y_train_reg)
 
-model = train_model(df)
-clf = model.named_steps["clf"]
+    # Residual standard deviation for CI
+    train_preds = reg_model.predict(X_train)
+    residuals = y_train_reg - train_preds
+    residual_std = np.std(residuals)
+
+    return clf_model, reg_model, residual_std
+
+clf_model, reg_model, residual_std = train_models(df)
 
 # ----------------------------------------------------------
 # Risk Registry
@@ -94,8 +112,14 @@ clf = model.named_steps["clf"]
 
 if "risk_registry" not in st.session_state:
     st.session_state.risk_registry = pd.DataFrame(
-        columns=["MRN", "Risk Level", "Order DateTime",
-                 "Delay Probability", "Elapsed Minutes"]
+        columns=[
+            "MRN",
+            "Risk Level",
+            "Order DateTime",
+            "Delay Probability",
+            "Projected Minutes",
+            "Elapsed Minutes"
+        ]
     )
 
 # ----------------------------------------------------------
@@ -116,16 +140,13 @@ def assign_severity(prob):
 # AI Advisory Generator
 # ----------------------------------------------------------
 
-def generate_advisory(prob, patient_data):
+def generate_advisory(prob, projected_minutes, patient_data):
 
     severity, _ = assign_severity(prob)
 
     prompt = f"""
 You are advising a HOSPITAL DISCHARGE TEAM.
 
-Their goal is to ensure this patient is discharged ON TIME and prevent operational delays.
-
-This is NOT clinical treatment advice.
 This is operational discharge guidance only.
 
 Patient Profile:
@@ -133,6 +154,7 @@ Patient Profile:
 - Length of Stay: {patient_data['Length of Stay (days)']}
 - Diagnosis: {patient_data['Primary Diagnosis (Description)']}
 - Delay Probability: {round(prob,2)}
+- Projected Discharge Duration: {int(projected_minutes)} minutes
 - Risk Level: {severity}
 
 Use EXACTLY these section headers:
@@ -176,23 +198,11 @@ with st.form("patient_form", clear_on_submit=True):
 
     with col1:
         los = st.number_input("Length of Stay (days)", 0, 100, 5)
-
-        doctors = st.slider(
-            "Number of Doctors Involved",
-            min_value=1,
-            max_value=30,
-            value=2
-        )
+        doctors = st.slider("Number of Doctors Involved", 1, 30, 2)
 
     with col2:
         bill = st.number_input("Current Bill (PHP)", 0, 2000000, 50000)
-
-        age = st.slider(
-            "Patient Age",
-            min_value=0,
-            max_value=120,
-            value=40
-        )
+        age = st.slider("Patient Age", 0, 120, 40)
 
     diagnosis_input = st.text_input("Enter Diagnosis")
 
@@ -204,10 +214,8 @@ with st.form("patient_form", clear_on_submit=True):
         order_date = st.date_input("Discharge Order Date")
 
     with col_time:
-        order_time = st.time_input(
-            "Discharge Order Time",
-            step=timedelta(minutes=1)
-        )
+        order_time = st.time_input("Discharge Order Time",
+                                   step=timedelta(minutes=1))
 
     submitted = st.form_submit_button("Generate Advisory")
 
@@ -239,15 +247,25 @@ if submitted:
 
         input_df = pd.DataFrame([baseline_row])
 
-        input_transformed = model.named_steps["pre"].transform(input_df)
-        input_transformed = np.array(input_transformed).astype(float)
+        # Classification
+        prob = clf_model.predict_proba(input_df)[0][1]
 
-        prob = clf.predict_proba(input_transformed)[0][1]
+        # Regression
+        projected_minutes = reg_model.predict(input_df)[0]
+
+        # Confidence interval
+        ci_lower = projected_minutes - (1.96 * residual_std)
+        ci_upper = projected_minutes + (1.96 * residual_std)
+
         severity, badge = assign_severity(prob)
 
         st.subheader("Prediction")
         st.progress(float(prob))
         st.markdown(f"Delay Probability: {round(prob,2)}")
+        st.markdown(f"Projected Duration: {int(projected_minutes)} minutes")
+        st.markdown(
+            f"Expected Range: {int(ci_lower)}–{int(ci_upper)} minutes (95% CI)"
+        )
 
         if severity == "Critical":
             st.error("🔴 CRITICAL – Early Discharge Team Intervention Recommended")
@@ -258,7 +276,7 @@ if submitted:
         else:
             st.success("🟢 LOW – Standard Discharge Workflow")
 
-        # Add to board
+        # Update Board
         order_datetime = datetime.combine(order_date, order_time)
         elapsed = int((datetime.now() - order_datetime).total_seconds() / 60)
 
@@ -267,6 +285,7 @@ if submitted:
             "Risk Level": severity,
             "Order DateTime": order_datetime,
             "Delay Probability": round(prob, 3),
+            "Projected Minutes": int(projected_minutes),
             "Elapsed Minutes": elapsed
         }])
 
@@ -281,8 +300,7 @@ if submitted:
             ignore_index=True
         )
 
-        # Generate AI Advisory
-        advisory = generate_advisory(prob, baseline_row)
+        advisory = generate_advisory(prob, projected_minutes, baseline_row)
 
         st.markdown("## Discharge Team Operational Advisory")
         st.markdown(advisory)
@@ -300,7 +318,6 @@ if not st.session_state.risk_registry.empty:
         ascending=False
     ).reset_index(drop=True)
 
-    # Conditional coloring
     def highlight_elapsed(val):
         if val > 90:
             return "background-color: #ff4d4d; color: white;"
