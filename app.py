@@ -296,9 +296,15 @@ if not st.session_state.risk_registry.empty:
     board["Updated Projected Minutes"] = updated_proj
     board["Acceleration Risk"] = acceleration_flags
 
-    # 🔹 REMOVE DECIMALS HERE
-    board["Original Projected Minutes"] = board["Original Projected Minutes"].round(0).astype(int)
-    board["Updated Projected Minutes"] = board["Updated Projected Minutes"].round(0).astype(int)
+    board["Original Projected Minutes"] = pd.to_numeric(
+    board["Original Projected Minutes"],
+    errors="coerce"
+).fillna(0).round(0).astype(int)
+
+    board["Updated Projected Minutes"] = pd.to_numeric(
+        board["Updated Projected Minutes"],
+        errors="coerce"
+    ).fillna(0).round(0).astype(int)
     
     board = board.sort_values(
         by="Delay Probability",
