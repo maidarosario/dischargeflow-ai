@@ -1,7 +1,7 @@
 # ==========================================================
 # DischargeFlow AI
 # Live Discharge Risk Command Center
-# Elapsed Escalation + Auto Refresh Enabled
+# Acceleration Risk + Dynamic Projection + Auto Refresh
 # ==========================================================
 
 import streamlit as st
@@ -24,19 +24,9 @@ import time
 st.set_page_config(page_title="DischargeFlow AI", layout="wide")
 st.title("DischargeFlow AI")
 st.caption("Live discharge delay monitoring and operational command board.")
-st.markdown("""
-### Operational Enhancements
-
-- Live discharge delay risk monitoring  
-- Projected completion time forecasting  
-- Automatic early warning escalation  
-- Real-time command board updates  
-- Actionable discharge coordination guidance  
-- Data-driven prioritization of high-risk cases  
-""")
 
 # ----------------------------------------------------------
-# AUTO REFRESH (Every 30 seconds)
+# Auto Refresh (30 seconds)
 # ----------------------------------------------------------
 
 if "last_refresh" not in st.session_state:
@@ -47,11 +37,11 @@ if time.time() - st.session_state.last_refresh > 30:
     st.rerun()
 
 # ----------------------------------------------------------
-# OpenAI Configuration
+# OpenAI Setup
 # ----------------------------------------------------------
 
 if "OPENAI_API_KEY" not in st.secrets:
-    st.error("OpenAI API key not configured in Streamlit Secrets.")
+    st.error("OpenAI API key not configured.")
     st.stop()
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -125,13 +115,9 @@ def train_models(df):
     clf_model.fit(X_train, y_train_class)
     reg_model.fit(X_train, y_train_reg)
 
-    train_preds = reg_model.predict(X_train)
-    residuals = y_train_reg - train_preds
-    residual_std = np.std(residuals)
+    return clf_model, reg_model
 
-    return clf_model, reg_model, residual_std
-
-clf_model, reg_model, residual_std = train_models(df)
+clf_model, reg_model = train_models(df)
 
 # ----------------------------------------------------------
 # Risk Registry
@@ -144,8 +130,10 @@ if "risk_registry" not in st.session_state:
             "Risk Level",
             "Order DateTime",
             "Delay Probability",
-            "Projected Minutes",
-            "Elapsed Minutes"
+            "Original Projected Minutes",
+            "Updated Projected Minutes",
+            "Elapsed Minutes",
+            "Acceleration Risk"
         ]
     )
 
@@ -155,13 +143,13 @@ if "risk_registry" not in st.session_state:
 
 def assign_severity(prob):
     if prob >= 0.85:
-        return "Critical", "🔴"
+        return "Critical"
     elif prob >= 0.70:
-        return "High", "🟠"
+        return "High"
     elif prob >= 0.40:
-        return "Moderate", "🟡"
+        return "Moderate"
     else:
-        return "Low", "🟢"
+        return "Low"
 
 # ----------------------------------------------------------
 # Patient Input
@@ -199,7 +187,7 @@ with st.form("patient_form", clear_on_submit=True):
     submitted = st.form_submit_button("Generate Advisory")
 
 # ----------------------------------------------------------
-# Prediction + Escalation
+# Generate Prediction
 # ----------------------------------------------------------
 
 if submitted:
@@ -235,35 +223,29 @@ if submitted:
         prob = clf_model.predict_proba(input_df)[0][1]
         projected_minutes = reg_model.predict(input_df)[0]
 
-        # -----------------------------
-        # AUTO ESCALATION LOGIC
-        # -----------------------------
+        severity = assign_severity(prob)
 
-        if elapsed >= projected_minutes:
-            prob = max(prob, 0.90)
-            severity = "Critical"
-            badge = "🔴"
-            st.error("Elapsed time has exceeded projected duration. Immediate escalation required.")
-        else:
-            severity, badge = assign_severity(prob)
+        # Acceleration Risk Logic
+        acceleration = False
 
-        ci_lower = projected_minutes - (1.96 * residual_std)
-        ci_upper = projected_minutes + (1.96 * residual_std)
+        if projected_minutes > 0:
+            drift_ratio = (
+                (projected_minutes - projected_minutes) /
+                projected_minutes
+            )
 
-        st.subheader("Prediction")
-        st.progress(float(prob))
-        st.markdown(f"Delay Probability: {round(prob,2)}")
-        st.markdown(f"Projected Duration: {int(projected_minutes)} minutes")
-        st.markdown(f"Expected Range: {int(ci_lower)}–{int(ci_upper)} minutes (95% CI)")
+            if elapsed >= 0.8 * projected_minutes:
+                acceleration = True
 
-        # Update Board
         new_row = pd.DataFrame([{
             "MRN": mrn,
             "Risk Level": severity,
             "Order DateTime": order_datetime,
             "Delay Probability": round(prob, 3),
-            "Projected Minutes": int(projected_minutes),
-            "Elapsed Minutes": elapsed
+            "Original Projected Minutes": int(projected_minutes),
+            "Updated Projected Minutes": int(projected_minutes),
+            "Elapsed Minutes": elapsed,
+            "Acceleration Risk": "YES" if acceleration else "NO"
         }])
 
         st.session_state.risk_registry = (
@@ -278,34 +260,59 @@ if submitted:
         )
 
 # ----------------------------------------------------------
-# Live Risk Command Board
+# Command Board
 # ----------------------------------------------------------
 
 if not st.session_state.risk_registry.empty:
 
     display_df = st.session_state.risk_registry.copy()
 
-    # Recalculate elapsed dynamically
     display_df["Elapsed Minutes"] = display_df["Order DateTime"].apply(
         lambda x: int((datetime.now() - x).total_seconds() / 60)
     )
+
+    # Update projection dynamically
+    updated_list = []
+    acceleration_flags = []
+
+    for _, row in display_df.iterrows():
+
+        baseline_row = {
+            "Length of Stay (days)": 5,
+            "Number of Doctors Involved": 2,
+            "Current Bill (PHP)": 50000,
+            "Patient Age": 40,
+            "Primary Diagnosis (Description)": "",
+            "Elapsed Minutes": row["Elapsed Minutes"]
+        }
+
+        temp_df = pd.DataFrame([baseline_row])
+        new_projection = reg_model.predict(temp_df)[0]
+
+        updated_list.append(int(new_projection))
+
+        # Acceleration detection
+        if row["Elapsed Minutes"] >= 0.8 * new_projection:
+            acceleration_flags.append("YES")
+        else:
+            acceleration_flags.append("NO")
+
+    display_df["Updated Projected Minutes"] = updated_list
+    display_df["Acceleration Risk"] = acceleration_flags
 
     display_df = display_df.sort_values(
         by="Delay Probability",
         ascending=False
     ).reset_index(drop=True)
 
-    def highlight_elapsed(val):
-        if val > 90:
-            return "background-color: #ff4d4d; color: white;"
-        elif 61 <= val <= 90:
-            return "background-color: #fff176;"
-        else:
-            return ""
+    def highlight_acceleration(val):
+        if val == "YES":
+            return "background-color: #ff6b6b; color: white;"
+        return ""
 
     styled_df = display_df.style.applymap(
-        highlight_elapsed,
-        subset=["Elapsed Minutes"]
+        highlight_acceleration,
+        subset=["Acceleration Risk"]
     )
 
     st.markdown("## Discharge Risk Command Board")
