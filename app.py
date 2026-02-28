@@ -1,7 +1,7 @@
 # ==========================================================
 # DischargeFlow AI
-# Live Discharge Risk Command Center
-# Acceleration Risk + Dynamic Projection + Auto Refresh
+# Stable Dynamic Projection Architecture
+# Classification + Regression + Acceleration Risk
 # ==========================================================
 
 import streamlit as st
@@ -23,7 +23,16 @@ import time
 
 st.set_page_config(page_title="DischargeFlow AI", layout="wide")
 st.title("DischargeFlow AI")
-st.caption("Live discharge delay monitoring and operational command board.")
+
+st.markdown("""
+### System Highlights
+- Real-time discharge delay risk prediction  
+- Projected discharge duration in minutes  
+- Dynamic elapsed-time adjustment  
+- Automatic escalation monitoring  
+- Acceleration risk detection  
+- Live command board updates  
+""")
 
 # ----------------------------------------------------------
 # Auto Refresh (30 seconds)
@@ -104,11 +113,11 @@ def train_models(df):
         ("reg", GradientBoostingRegressor(random_state=42))
     ])
 
-    X_train, X_test, y_train_class, y_test_class = train_test_split(
+    X_train, _, y_train_class, _ = train_test_split(
         X, y_class, test_size=0.2, random_state=42
     )
 
-    _, _, y_train_reg, y_test_reg = train_test_split(
+    _, _, y_train_reg, _ = train_test_split(
         X, y_reg, test_size=0.2, random_state=42
     )
 
@@ -133,7 +142,8 @@ if "risk_registry" not in st.session_state:
             "Original Projected Minutes",
             "Updated Projected Minutes",
             "Elapsed Minutes",
-            "Acceleration Risk"
+            "Acceleration Risk",
+            "Feature Snapshot"
         ]
     )
 
@@ -199,43 +209,25 @@ if submitted:
         order_datetime = datetime.combine(order_date, order_time)
         elapsed = int((datetime.now() - order_datetime).total_seconds() / 60)
 
-        baseline_row = {}
+        # Build feature snapshot from training structure
+        feature_snapshot = df.drop(
+            columns=["delayed_over_200mins",
+                     "Discharge Duration (minutes)"]
+        ).iloc[0].copy()
 
-        for col in df.select_dtypes(include=["int64", "float64"]).columns:
-            if col not in ["delayed_over_200mins",
-                           "Discharge Duration (minutes)"]:
-                baseline_row[col] = df[col].median()
+        feature_snapshot["Length of Stay (days)"] = los
+        feature_snapshot["Number of Doctors Involved"] = doctors
+        feature_snapshot["Current Bill (PHP)"] = bill
+        feature_snapshot["Patient Age"] = age
+        feature_snapshot["Primary Diagnosis (Description)"] = diagnosis_input
+        feature_snapshot["Elapsed Minutes"] = elapsed
 
-        for col in df.select_dtypes(include=["object"]).columns:
-            baseline_row[col] = df[col].mode()[0]
-
-        baseline_row.update({
-            "Length of Stay (days)": los,
-            "Number of Doctors Involved": doctors,
-            "Current Bill (PHP)": bill,
-            "Patient Age": age,
-            "Primary Diagnosis (Description)": diagnosis_input,
-            "Elapsed Minutes": elapsed
-        })
-
-        input_df = pd.DataFrame([baseline_row])
+        input_df = pd.DataFrame([feature_snapshot])
 
         prob = clf_model.predict_proba(input_df)[0][1]
         projected_minutes = reg_model.predict(input_df)[0]
 
         severity = assign_severity(prob)
-
-        # Acceleration Risk Logic
-        acceleration = False
-
-        if projected_minutes > 0:
-            drift_ratio = (
-                (projected_minutes - projected_minutes) /
-                projected_minutes
-            )
-
-            if elapsed >= 0.8 * projected_minutes:
-                acceleration = True
 
         new_row = pd.DataFrame([{
             "MRN": mrn,
@@ -245,7 +237,8 @@ if submitted:
             "Original Projected Minutes": int(projected_minutes),
             "Updated Projected Minutes": int(projected_minutes),
             "Elapsed Minutes": elapsed,
-            "Acceleration Risk": "YES" if acceleration else "NO"
+            "Acceleration Risk": "NO",
+            "Feature Snapshot": feature_snapshot.to_dict()
         }])
 
         st.session_state.risk_registry = (
@@ -267,37 +260,32 @@ if not st.session_state.risk_registry.empty:
 
     display_df = st.session_state.risk_registry.copy()
 
-    display_df["Elapsed Minutes"] = display_df["Order DateTime"].apply(
-        lambda x: int((datetime.now() - x).total_seconds() / 60)
-    )
-
-    # Update projection dynamically
-    updated_list = []
+    updated_proj = []
+    updated_elapsed = []
     acceleration_flags = []
 
-    for _, row in display_df.iterrows():
+    for idx, row in display_df.iterrows():
 
-        baseline_row = {
-            "Length of Stay (days)": 5,
-            "Number of Doctors Involved": 2,
-            "Current Bill (PHP)": 50000,
-            "Patient Age": 40,
-            "Primary Diagnosis (Description)": "",
-            "Elapsed Minutes": row["Elapsed Minutes"]
-        }
+        elapsed_now = int(
+            (datetime.now() - row["Order DateTime"]).total_seconds() / 60
+        )
 
-        temp_df = pd.DataFrame([baseline_row])
+        snapshot = row["Feature Snapshot"]
+        snapshot["Elapsed Minutes"] = elapsed_now
+
+        temp_df = pd.DataFrame([snapshot])
         new_projection = reg_model.predict(temp_df)[0]
 
-        updated_list.append(int(new_projection))
+        updated_proj.append(int(new_projection))
+        updated_elapsed.append(elapsed_now)
 
-        # Acceleration detection
-        if row["Elapsed Minutes"] >= 0.8 * new_projection:
+        if elapsed_now >= 0.8 * new_projection:
             acceleration_flags.append("YES")
         else:
             acceleration_flags.append("NO")
 
-    display_df["Updated Projected Minutes"] = updated_list
+    display_df["Elapsed Minutes"] = updated_elapsed
+    display_df["Updated Projected Minutes"] = updated_proj
     display_df["Acceleration Risk"] = acceleration_flags
 
     display_df = display_df.sort_values(
@@ -305,15 +293,19 @@ if not st.session_state.risk_registry.empty:
         ascending=False
     ).reset_index(drop=True)
 
-    def highlight_acceleration(val):
+    def highlight_accel(val):
         if val == "YES":
             return "background-color: #ff6b6b; color: white;"
         return ""
 
     styled_df = display_df.style.applymap(
-        highlight_acceleration,
+        highlight_accel,
         subset=["Acceleration Risk"]
     )
 
     st.markdown("## Discharge Risk Command Board")
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    st.dataframe(
+        styled_df.drop(columns=["Feature Snapshot"]),
+        use_container_width=True,
+        hide_index=True
+    )
