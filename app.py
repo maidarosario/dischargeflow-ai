@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import pytz
+
 from openai import OpenAI
 
 from sklearn.model_selection import train_test_split
@@ -275,8 +275,19 @@ if submitted:
 
 if not st.session_state.risk_registry.empty:
 
-    ph_tz = pytz.timezone("Asia/Manila")
-    now = datetime.now(ph_tz)
+    from zoneinfo import ZoneInfo
+
+    PH_TZ = ZoneInfo("Asia/Manila")
+
+    now = datetime.now(PH_TZ)
+
+    order_datetime = datetime.combine(order_date, order_time)
+    order_datetime = order_datetime.replace(tzinfo=PH_TZ)
+
+    elapsed = max(
+        int((now - order_datetime).total_seconds() // 60),
+        0
+    )
 
     board = st.session_state.risk_registry.copy()
 
