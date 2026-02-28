@@ -301,19 +301,18 @@ if not st.session_state.risk_registry.empty:
         ascending=False
     ).reset_index(drop=True)
 
+    # 🔹 DROP BEFORE STYLING
+    display_board = board.drop(columns=["Feature Snapshot"])
+
     def highlight_accel(val):
         if val == "YES":
             return "background-color: #ff6b6b; color: white;"
         return ""
 
-    styled = board.style.applymap(
+    styled = display_board.style.applymap(
         highlight_accel,
         subset=["Acceleration Risk"]
     )
 
     st.markdown("## Discharge Risk Command Board")
-    st.dataframe(
-        styled.drop(columns=["Feature Snapshot"]),
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
