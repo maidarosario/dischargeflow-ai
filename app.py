@@ -127,7 +127,15 @@ if "risk_registry" not in st.session_state:
             "Feature Snapshot"
         ]
     )
-
+# 🔧 Compatibility reset (fix old board structure)
+if "Feature Snapshot" not in st.session_state.risk_registry.columns:
+    st.session_state.risk_registry = pd.DataFrame(
+        columns=[
+            "MRN",
+            "Order DateTime",
+            "Feature Snapshot"
+        ]
+    )
 # ----------------------------------------------------------
 # PATIENT INPUT
 # ----------------------------------------------------------
@@ -257,4 +265,3 @@ if not st.session_state.risk_registry.empty:
         use_container_width=True,
         hide_index=True
     )
-    
