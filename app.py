@@ -242,8 +242,8 @@ if submitted:
         st.markdown("## Discharge Team Operational Advisory")
         st.markdown(advisory)
 
-# ----------------------------------------------------------
-# Live Dynamic Reforecast Board
+## ----------------------------------------------------------
+# Live Dynamic Reforecast Board (No Snapshot Storage)
 # ----------------------------------------------------------
 
 if not st.session_state.risk_registry.empty:
@@ -255,14 +255,22 @@ if not st.session_state.risk_registry.empty:
 
     for _, row in board.iterrows():
 
-        snapshot = row["Feature Snapshot"].copy()
-
         elapsed = int((now - row["Order DateTime"]).total_seconds() / 60)
         elapsed = max(elapsed, 0)
 
-        snapshot["Elapsed Minutes"] = elapsed
+        # Rebuild feature row using stored projected baseline logic
+        baseline = {}
 
-        temp_df = pd.DataFrame([snapshot])
+        for col in numeric_features:
+            if col == "Elapsed Minutes":
+                baseline[col] = elapsed
+            else:
+                baseline[col] = df[col].median()
+
+        for col in categorical_features:
+            baseline[col] = df[col].mode()[0]
+
+        temp_df = pd.DataFrame([baseline])
 
         new_projection = reg_model.predict(temp_df)[0]
         new_projection = int(round(new_projection))
