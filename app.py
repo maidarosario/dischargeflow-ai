@@ -143,11 +143,11 @@ st.markdown("## Model Performance")
 
 with st.expander("View Model Performance Details"):
     
-st.write(f"**Mean Absolute Error:** {round(mae,2)} minutes")
-st.write(f"**R² Score:** {round(r2,3)}")
+    st.write(f"**Mean Absolute Error:** {round(mae,2)} minutes")
+    st.write(f"**R² Score:** {round(r2,3)}")
 
-if client:
-    explanation_prompt = f"""
+    if client:
+        explanation_prompt = f"""
 Explain to a hospital discharge operations team what these results mean:
 
 Mean Absolute Error: {round(mae,2)} minutes
