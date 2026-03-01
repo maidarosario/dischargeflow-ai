@@ -283,6 +283,7 @@ for idx, row in st.session_state.risk_registry.iterrows():
         "MRN": row["MRN"],
         "OrderDateTime": row["OrderDateTime"],
         "Risk": risk,
+        "OriginalProjection": int(row["LastPrediction"]),
         "Elapsed": elapsed,
         "Remaining": int(updated_remaining)
     })
