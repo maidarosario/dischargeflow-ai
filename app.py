@@ -1,7 +1,6 @@
 # ==========================================================
-# DischargeFlow AI – Upgraded Version
-# Upgrades: 1B (Elapsed Training), 2 (Metrics + AI Explain),
-# 3 (Persistence + Completion Capture)
+# DischargeFlow AI – Stable Learning System Version
+# Upgrades 1B + 2 + 3 (Clean UI Restored)
 # ==========================================================
 
 import streamlit as st
@@ -24,7 +23,7 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # ----------------------------------------------------------
 
 st.set_page_config(page_title="DischargeFlow AI", layout="wide")
-st.title("DischargeFlow AI – Learning System Version")
+st.title("DischargeFlow AI")
 
 PH_TZ = ZoneInfo("Asia/Manila")
 
@@ -33,7 +32,7 @@ if "OPENAI_API_KEY" in st.secrets:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # ----------------------------------------------------------
-# DATABASE SETUP (Upgrade 3)
+# DATABASE (Upgrade 3)
 # ----------------------------------------------------------
 
 conn = sqlite3.connect("dischargeflow.db", check_same_thread=False)
@@ -57,17 +56,13 @@ conn.commit()
 
 @st.cache_data
 def load_and_expand():
-
     df = pd.read_csv("fictitious_dataset_FINAL.csv")
-
     expanded_rows = []
 
     for idx, row in df.iterrows():
-
         final_duration = row["Discharge Duration (minutes)"]
 
         for elapsed in range(0, int(final_duration), 60):
-
             remaining = final_duration - elapsed
 
             new_row = row.copy()
@@ -77,14 +72,12 @@ def load_and_expand():
 
             expanded_rows.append(new_row)
 
-    expanded_df = pd.DataFrame(expanded_rows)
-
-    return expanded_df
+    return pd.DataFrame(expanded_rows)
 
 df = load_and_expand()
 
 # ----------------------------------------------------------
-# TRAIN MODEL (Group Split)
+# TRAIN MODEL
 # ----------------------------------------------------------
 
 @st.cache_resource
@@ -92,11 +85,7 @@ def train_model(df):
 
     target = "Remaining Minutes"
 
-    X = df.drop(columns=[
-        "Discharge Duration (minutes)",
-        "Remaining Minutes"
-    ])
-
+    X = df.drop(columns=["Discharge Duration (minutes)", "Remaining Minutes"])
     y = df[target]
     groups = df["CaseID"]
 
@@ -118,14 +107,12 @@ def train_model(df):
     ])
 
     splitter = GroupShuffleSplit(test_size=0.2, random_state=42)
-
     train_idx, test_idx = next(splitter.split(X, y, groups))
 
     X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
     y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
     model.fit(X_train, y_train)
-
     y_pred = model.predict(X_test)
 
     mae = mean_absolute_error(y_test, y_pred)
@@ -136,57 +123,47 @@ def train_model(df):
 reg_model, feature_columns, mae, r2 = train_model(df)
 
 # ----------------------------------------------------------
-# DISPLAY MODEL PERFORMANCE (Upgrade 2)
+# MODEL PERFORMANCE (Upgrade 2)
 # ----------------------------------------------------------
 
-st.markdown("## Model Performance")
-
 with st.expander("View Model Performance Details"):
-    
-    st.write(f"**Mean Absolute Error:** {round(mae,2)} minutes")
-    st.write(f"**R² Score:** {round(r2,3)}")
+
+    st.write(f"Mean Absolute Error: {round(mae,2)} minutes")
+    st.write(f"R² Score: {round(r2,3)}")
 
     if client:
         explanation_prompt = f"""
-Explain to a hospital discharge operations team what these results mean:
+Explain to a hospital discharge operations team:
 
-Mean Absolute Error: {round(mae,2)} minutes
-R² Score: {round(r2,3)}
+MAE: {round(mae,2)} minutes
+R²: {round(r2,3)}
 
 Explain:
-- What MAE means in operational terms
-- What R² means in simple language
-- Whether this is strong, moderate, or weak performance
-Keep it concise.
+- What MAE means operationally
+- What R² means
+- Whether performance is strong, moderate, or weak
+Keep concise.
 """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "Hospital operations ML explainer."},
-            {"role": "user", "content": explanation_prompt}
-        ],
-        temperature=0.2
-    )
-
-    st.markdown("### AI Interpretation for Discharge Team")
-    st.markdown(response.choices[0].message.content)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Hospital ML explainer."},
+                {"role": "user", "content": explanation_prompt}
+            ],
+            temperature=0.2
+        )
+        st.markdown(response.choices[0].message.content)
 
 # ----------------------------------------------------------
 # SESSION STATE
 # ----------------------------------------------------------
-required_cols = [
-    "MRN",
-    "OrderDateTime",
-    "Baseline",
-    "LastPrediction"
-]
+
+required_cols = ["MRN", "OrderDateTime", "Baseline", "LastPrediction"]
 
 if "risk_registry" not in st.session_state:
     st.session_state.risk_registry = pd.DataFrame(columns=required_cols)
 
-if not set(required_cols).issubset(
-        set(st.session_state.risk_registry.columns)):
+if not set(required_cols).issubset(st.session_state.risk_registry.columns):
     st.session_state.risk_registry = pd.DataFrame(columns=required_cols)
 
 # ----------------------------------------------------------
@@ -198,11 +175,11 @@ st.markdown("## New Patient Forecast")
 with st.form("patient_form"):
 
     mrn = st.text_input("MRN")
-    los = st.number_input("Length of Stay", 0, 100, 5)
-    doctors = st.slider("Doctors", 1, 30, 2)
-    bill = st.number_input("Current Bill", 0, 2000000, 50000)
-    age = st.slider("Age", 0, 120, 40)
-    diagnosis = st.text_input("Diagnosis")
+    los = st.number_input("Length of Stay (days)", 0, 100, 5)
+    doctors = st.slider("Number of Doctors Involved", 1, 30, 2)
+    bill = st.number_input("Current Bill (PHP)", 0, 2000000, 50000)
+    age = st.slider("Patient Age", 0, 120, 40)
+    diagnosis = st.text_input("Primary Diagnosis (Description)")
 
     submit = st.form_submit_button("Generate Forecast")
 
@@ -231,36 +208,96 @@ if submit and mrn:
         }])
     ], ignore_index=True)
 
+    # -----------------------------
+    # INITIAL FORECAST + ADVISORY
+    # -----------------------------
+
+    st.subheader("Initial Forecast")
+    st.markdown(f"Projected Remaining Time: **{int(remaining)} minutes**")
+
+    if remaining >= 240:
+        risk = "High"
+    elif remaining >= 180:
+        risk = "Moderate"
+    else:
+        risk = "Low"
+
+    st.markdown(f"Risk Level: **{risk}**")
+
+    if client:
+        advisory_prompt = f"""
+Projected Remaining Time: {int(remaining)} minutes
+Risk Level: {risk}
+
+Provide:
+Operational Risks
+Clinical Coordination Actions
+Discharge Process Actions
+Escalation Plan
+
+Bullet format only.
+"""
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Hospital discharge advisor."},
+                {"role": "user", "content": advisory_prompt}
+            ],
+            temperature=0.2
+        )
+
+        st.markdown("## Discharge Team Operational Advisory")
+        st.markdown(response.choices[0].message.content)
+
 # ----------------------------------------------------------
-# COMMAND BOARD + DISCHARGE BUTTON (Upgrade 3)
+# COMMAND BOARD (Restored Table)
 # ----------------------------------------------------------
 
 st.markdown("## Command Board")
 
+board_rows = []
 now = datetime.now(PH_TZ)
 
 for idx, row in st.session_state.risk_registry.iterrows():
 
-    # --- SAFETY GUARD ---
-    if "Baseline" not in row or pd.isna(row["Baseline"]) is None:
+    if "Baseline" not in row.index or row["Baseline"] is None:
         continue
+
     snapshot = row["Baseline"].copy()
     elapsed = int((now - row["OrderDateTime"]).total_seconds() / 60)
     elapsed = max(elapsed, 0)
 
     snapshot["Elapsed Minutes"] = elapsed
-
     updated_remaining = reg_model.predict(pd.DataFrame([snapshot]))[0]
 
-    st.write(f"MRN: {row['MRN']}")
-    st.write(f"Elapsed: {elapsed} mins")
-    st.write(f"Updated Remaining: {int(updated_remaining)} mins")
+    board_rows.append({
+        "MRN": row["MRN"],
+        "Elapsed Minutes": elapsed,
+        "Updated Remaining Minutes": int(updated_remaining)
+    })
+
+board_df = pd.DataFrame(board_rows)
+
+if not board_df.empty:
+    st.dataframe(
+        board_df.sort_values("Updated Remaining Minutes", ascending=False),
+        use_container_width=True,
+        hide_index=True
+    )
+
+# ----------------------------------------------------------
+# DISCHARGE BUTTONS
+# ----------------------------------------------------------
+
+for idx, row in st.session_state.risk_registry.iterrows():
+
+    if "Baseline" not in row.index or row["Baseline"] is None:
+        continue
 
     if st.button(f"Mark Discharged - {row['MRN']}"):
 
         completion_dt = datetime.now(PH_TZ)
         final_duration = (completion_dt - row["OrderDateTime"]).total_seconds() / 60
-
         error = final_duration - row["LastPrediction"]
 
         c.execute("""
@@ -277,4 +314,4 @@ for idx, row in st.session_state.risk_registry.iterrows():
 
         conn.commit()
 
-        st.success(f"Stored. Error: {round(error,2)} minutes")
+        st.success(f"Stored. Forecast Error: {round(error,2)} minutes")
