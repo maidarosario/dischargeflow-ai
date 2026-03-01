@@ -270,11 +270,21 @@ for idx, row in st.session_state.risk_registry.iterrows():
     snapshot["Elapsed Minutes"] = elapsed
     updated_remaining = reg_model.predict(pd.DataFrame([snapshot]))[0]
 
-    board_rows.append({
-        "MRN": row["MRN"],
-        "Elapsed Minutes": elapsed,
-        "Updated Remaining Minutes": int(updated_remaining)
-    })
+    # Risk calculation
+if updated_remaining >= 240:
+    risk = "High"
+elif updated_remaining >= 180:
+    risk = "Moderate"
+else:
+    risk = "Low"
+
+board_rows.append({
+    "MRN": row["MRN"],
+    "Order DateTime": row["OrderDateTime"].strftime("%Y-%m-%d %H:%M"),
+    "Elapsed Minutes": elapsed,
+    "Updated Remaining Minutes": int(updated_remaining),
+    "Risk Level": risk
+})
 
 board_df = pd.DataFrame(board_rows)
 
