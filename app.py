@@ -258,6 +258,7 @@ st.markdown("## Command Board")
 board_rows = []
 now = datetime.now(PH_TZ)
 
+# Build structured rows
 for idx, row in st.session_state.risk_registry.iterrows():
 
     if "Baseline" not in row.index or row["Baseline"] is None:
@@ -270,30 +271,86 @@ for idx, row in st.session_state.risk_registry.iterrows():
     snapshot["Elapsed Minutes"] = elapsed
     updated_remaining = reg_model.predict(pd.DataFrame([snapshot]))[0]
 
-    # Risk calculation
-if updated_remaining >= 240:
-    risk = "High"
-elif updated_remaining >= 180:
-    risk = "Moderate"
-else:
-    risk = "Low"
+    # Risk logic
+    if updated_remaining >= 240:
+        risk = "High"
+    elif updated_remaining >= 180:
+        risk = "Moderate"
+    else:
+        risk = "Low"
 
-board_rows.append({
-    "MRN": row["MRN"],
-    "Order DateTime": row["OrderDateTime"].strftime("%Y-%m-%d %H:%M"),
-    "Elapsed Minutes": elapsed,
-    "Updated Remaining Minutes": int(updated_remaining),
-    "Risk Level": risk
-})
+    board_rows.append({
+        "MRN": row["MRN"],
+        "OrderDateTime": row["OrderDateTime"],
+        "Risk": risk,
+        "Elapsed": elapsed,
+        "Remaining": int(updated_remaining)
+    })
 
+# Convert to DataFrame and sort
 board_df = pd.DataFrame(board_rows)
 
 if not board_df.empty:
-    st.dataframe(
-        board_df.sort_values("Updated Remaining Minutes", ascending=False),
-        use_container_width=True,
-        hide_index=True
-    )
+
+    board_df = board_df.sort_values(
+        "Remaining", ascending=False
+    ).reset_index(drop=True)
+
+    # Header
+    header_cols = st.columns([1, 2, 1, 1, 2, 2])
+    headers = ["Rank", "MRN", "Order DateTime", "Risk", "Remaining (mins)", "Action"]
+
+    for col, header in zip(header_cols, headers):
+        col.markdown(f"**{header}**")
+
+    # Rows
+    for i, row in board_df.iterrows():
+
+        cols = st.columns([1, 2, 1, 1, 2, 2])
+
+        cols[0].write(i + 1)
+        cols[1].write(row["MRN"])
+        cols[2].write(row["OrderDateTime"].strftime("%Y-%m-%d %H:%M"))
+        cols[3].write(row["Risk"])
+        cols[4].write(row["Remaining"])
+
+        if cols[5].button(f"Mark Discharged", key=f"discharge_{row['MRN']}"):
+
+            completion_dt = datetime.now(PH_TZ)
+
+            original_row = st.session_state.risk_registry[
+                st.session_state.risk_registry["MRN"] == row["MRN"]
+            ].iloc[0]
+
+            final_duration = (
+                completion_dt - original_row["OrderDateTime"]
+            ).total_seconds() / 60
+
+            error = final_duration - original_row["LastPrediction"]
+
+            c.execute("""
+            INSERT INTO discharge_records
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                row["MRN"],
+                original_row["OrderDateTime"].isoformat(),
+                completion_dt.isoformat(),
+                final_duration,
+                original_row["LastPrediction"],
+                error
+            ))
+
+            conn.commit()
+
+            # Remove from active board
+            st.session_state.risk_registry = (
+                st.session_state.risk_registry[
+                    st.session_state.risk_registry["MRN"] != row["MRN"]
+                ]
+            )
+
+            st.success(f"{row['MRN']} discharged. Error: {round(error,2)} mins")
+            st.rerun()
 
 # ----------------------------------------------------------
 # DISCHARGE BUTTONS
