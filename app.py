@@ -297,8 +297,16 @@ if not board_df.empty:
     ).reset_index(drop=True)
 
     # Header
-    header_cols = st.columns([1, 2, 1, 1, 2, 2])
-    headers = ["Rank", "MRN", "Order DateTime", "Risk", "Remaining (mins)", "Action"]
+    header_cols = st.columns([1, 2, 2, 1, 2, 1, 2])
+    headers = [
+        "Rank",
+        "MRN",
+        "Order DateTime",
+        "Risk",
+        "Original (mins)",
+        "Remaining (mins)",
+        "Action"
+    ]
 
     for col, header in zip(header_cols, headers):
         col.markdown(f"**{header}**")
@@ -306,15 +314,16 @@ if not board_df.empty:
     # Rows
     for i, row in board_df.iterrows():
 
-        cols = st.columns([1, 2, 1, 1, 2, 2])
+        cols = st.columns([1, 2, 2, 1, 2, 1, 2])
 
         cols[0].write(i + 1)
         cols[1].write(row["MRN"])
         cols[2].write(row["OrderDateTime"].strftime("%Y-%m-%d %H:%M"))
         cols[3].write(row["Risk"])
-        cols[4].write(row["Remaining"])
+        cols[4].write(row["OriginalProjection"])
+        cols[5].write(row["Remaining"])
 
-        if cols[5].button(f"Mark Discharged", key=f"discharge_{row['MRN']}"):
+        if cols[6].button("Mark Discharged", key=f"discharge_{row['MRN']}"):
 
             completion_dt = datetime.now(PH_TZ)
 
@@ -352,33 +361,3 @@ if not board_df.empty:
             st.success(f"{row['MRN']} discharged. Error: {round(error,2)} mins")
             st.rerun()
 
-# ----------------------------------------------------------
-# DISCHARGE BUTTONS
-# ----------------------------------------------------------
-
-for idx, row in st.session_state.risk_registry.iterrows():
-
-    if "Baseline" not in row.index or row["Baseline"] is None:
-        continue
-
-    if st.button(f"Mark Discharged - {row['MRN']}"):
-
-        completion_dt = datetime.now(PH_TZ)
-        final_duration = (completion_dt - row["OrderDateTime"]).total_seconds() / 60
-        error = final_duration - row["LastPrediction"]
-
-        c.execute("""
-        INSERT INTO discharge_records
-        VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            row["MRN"],
-            row["OrderDateTime"].isoformat(),
-            completion_dt.isoformat(),
-            final_duration,
-            row["LastPrediction"],
-            error
-        ))
-
-        conn.commit()
-
-        st.success(f"Stored. Forecast Error: {round(error,2)} minutes")
