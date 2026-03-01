@@ -194,6 +194,38 @@ if submit and mrn:
 
     st.subheader("Initial Forecast")
     st.markdown(f"Projected Remaining Time: **{int(remaining)} minutes**")
+    # ----------------------------------------------------------
+    # Discharge Team AI Advisory
+    # ----------------------------------------------------------
+    
+    if client:
+    
+        advisory_prompt = f"""
+    You are advising a hospital discharge operations team.
+    
+    Projected Remaining Time: {int(remaining)} minutes
+    
+    Provide structured bullet points under:
+    
+    Operational Risks
+    Clinical Coordination Actions
+    Discharge Process Actions
+    Escalation Plan
+    
+    Keep it concise and practical.
+    """
+    
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Hospital discharge operations advisor."},
+                {"role": "user", "content": advisory_prompt}
+            ],
+            temperature=0.2
+        )
+
+    st.markdown("## Discharge Team Operational Advisory")
+    st.markdown(response.choices[0].message.content)
 
 # ----------------------------------------------------------
 # COMMAND BOARD
