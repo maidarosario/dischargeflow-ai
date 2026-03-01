@@ -240,7 +240,7 @@ now = datetime.now(PH_TZ)
 for idx, row in st.session_state.risk_registry.iterrows():
 
     # --- SAFETY GUARD ---
-    if "Baseline" not in row or pd.isna(row["Baseline"]):
+    if "Baseline" not in row or pd.isna(row["Baseline"]) is None:
         continue
     snapshot = row["Baseline"].copy()
     elapsed = int((now - row["OrderDateTime"]).total_seconds() / 60)
