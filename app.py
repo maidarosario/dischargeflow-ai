@@ -141,6 +141,8 @@ reg_model, feature_columns, mae, r2 = train_model(df)
 
 st.markdown("## Model Performance")
 
+with st.expander("View Model Performance Details"):
+    
 st.write(f"**Mean Absolute Error:** {round(mae,2)} minutes")
 st.write(f"**R² Score:** {round(r2,3)}")
 
